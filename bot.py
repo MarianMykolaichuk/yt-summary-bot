@@ -22,16 +22,29 @@ def extract_video_id(url):
     return None
 
 def get_transcript(video_id):
-    # Supadata API - реальний безкоштовний сервіс
-    url = f"https://api.supadata.ai/v1/youtube/transcript?videoId={video_id}"
-    headers = {"x-api-key": os.environ.get("SUPADATA_API_KEY", "")}
-    r = requests.get(url, headers=headers, timeout=30)
+    url = "https://youtube-transcriptor.p.rapidapi.com/transcript"
+    headers = {
+        "x-rapidapi-host": "youtube-transcriptor.p.rapidapi.com",
+        "x-rapidapi-key": os.environ["RAPIDAPI_KEY"]
+    }
+    params = {"video_id": video_id, "lang": "uk"}
+    r = requests.get(url, headers=headers, params=params, timeout=30)
     if r.status_code == 200:
         data = r.json()
-        chunks = data.get("content", [])
-        if chunks:
-            return " ".join(c.get("text", "") for c in chunks)
-    raise Exception(f"Статус {r.status_code}: субтитри недоступні")
+        if isinstance(data, list) and data:
+            return " ".join(i.get("text","") for i in data)
+        if isinstance(data, dict):
+            items = data.get("transcript", data.get("results", []))
+            if items:
+                return " ".join(i.get("text","") for i in items)
+    # fallback англійська
+    params["lang"] = "en"
+    r = requests.get(url, headers=headers, params=params, timeout=30)
+    if r.status_code == 200:
+        data = r.json()
+        if isinstance(data, list) and data:
+            return " ".join(i.get("text","") for i in data)
+    raise Exception(f"Статус {r.status_code}")
 
 def chunk_text(text, chunk_size=6000):
     words = text.split()
