@@ -22,21 +22,16 @@ def extract_video_id(url):
     return None
 
 def get_transcript(video_id):
-    # Використовуємо безкоштовний API
-    url = f"https://yt-transcript-api.xyz/api/transcript?videoId={video_id}&lang=uk"
-    r = requests.get(url, timeout=30)
+    # Supadata API - реальний безкоштовний сервіс
+    url = f"https://api.supadata.ai/v1/youtube/transcript?videoId={video_id}"
+    headers = {"x-api-key": os.environ.get("SUPADATA_API_KEY", "")}
+    r = requests.get(url, headers=headers, timeout=30)
     if r.status_code == 200:
         data = r.json()
-        if data:
-            return " ".join(item.get("text","") for item in data)
-    # Fallback: англійська
-    url = f"https://yt-transcript-api.xyz/api/transcript?videoId={video_id}&lang=en"
-    r = requests.get(url, timeout=30)
-    if r.status_code == 200:
-        data = r.json()
-        if data:
-            return " ".join(item.get("text","") for item in data)
-    raise Exception("Субтитри недоступні для цього відео")
+        chunks = data.get("content", [])
+        if chunks:
+            return " ".join(c.get("text", "") for c in chunks)
+    raise Exception(f"Статус {r.status_code}: субтитри недоступні")
 
 def chunk_text(text, chunk_size=6000):
     words = text.split()
