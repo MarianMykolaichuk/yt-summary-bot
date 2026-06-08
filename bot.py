@@ -1,13 +1,12 @@
 import os
 import re
+import yt_dlp
 import anthropic
 from telegram import Update, constants
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 def extract_video_id(url):
@@ -22,12 +21,31 @@ def extract_video_id(url):
     return None
 
 def get_transcript(video_id):
-    try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["uk","ru","en"])
-    except NoTranscriptFound:
-        transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript = next(iter(transcripts)).fetch()
-    return " ".join(t["text"] for t in transcript)
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    ydl_opts = {
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["uk", "ru", "en"],
+        "skip_download": True,
+        "quiet": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        subtitles = info.get("subtitles") or info.get("automatic_captions") or {}
+        for lang in ["uk", "ru", "en"]:
+            if lang in subtitles:
+                for fmt in subtitles[lang]:
+                    if fmt.get("ext") == "json3":
+                        import urllib.request, json
+                        with urllib.request.urlopen(fmt["url"]) as r:
+                            data = json.loads(r.read())
+                        events = data.get("events", [])
+                        text = " ".join(
+                            "".join(s.get("utf8","") for s in e.get("segs",[]))
+                            for e in events if e.get("segs")
+                        )
+                        return text.strip()
+    raise Exception("Субтитри не знайдено для цього відео")
 
 def chunk_text(text, chunk_size=6000):
     words = text.split()
@@ -47,15 +65,12 @@ def final_summary(partials):
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=1500,
-        messages=[{"role":"user","content":f"Зроби ОДИН фінальний структурований конспект.\nФормат:\n🎯 *Головна тема*\n📌 *Ключові тези*\n💡 *Практичні поради*\n✅ *Висновок*\n\nВідповідай українською. Markdown.\n\n{combined}"}]
+        messages=[{"role":"user","content":f"Зроби ОДИН фінальний структурований конспект.\nФормат:\n🎯 Головна тема\n📌 Ключові тези\n💡 Практичні поради\n✅ Висновок\n\nВідповідай українською.\n\n{combined}"}]
     )
     return response.content[0].text
 
 async def start(update, context):
-    await update.message.reply_text(
-        "👋 *YouTube Конспектор*\n\nСкинь посилання на YouTube відео — зроблю структурований конспект.",
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
+    await update.message.reply_text("👋 YouTube Конспектор\n\nСкинь посилання на YouTube відео — зроблю структурований конспект.")
 
 async def handle_message(update, context):
     text = update.message.text.strip()
@@ -66,9 +81,6 @@ async def handle_message(update, context):
     msg = await update.message.reply_text("⏳ Отримую транскрипт...")
     try:
         transcript = get_transcript(video_id)
-    except TranscriptsDisabled:
-        await msg.edit_text("❌ Субтитри вимкнені для цього відео.")
-        return
     except Exception as e:
         await msg.edit_text(f"❌ Не вдалося отримати транскрипт: {e}")
         return
@@ -83,7 +95,7 @@ async def handle_message(update, context):
             partials.append(summarize_chunk(chunk, i, len(chunks)))
         await msg.edit_text("✍️ Формую фінальний конспект...")
         summary = final_summary(partials) if len(partials) > 1 else partials[0]
-        await msg.edit_text(summary, parse_mode=constants.ParseMode.MARKDOWN)
+        await msg.edit_text(summary)
     except Exception as e:
         await msg.edit_text(f"❌ Помилка AI: {e}")
 
